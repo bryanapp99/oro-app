@@ -4,3 +4,4 @@ pandas_ta
 plotly
 pandas
 feedparser
+streamlit-autorefresh
