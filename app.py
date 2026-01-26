@@ -6,104 +6,111 @@ import plotly.graph_objects as go
 import feedparser
 from streamlit_autorefresh import st_autorefresh
 
-# 1. Configuración de Página y Memoria
-st.set_page_config(page_title="Gold Terminal PRO", layout="wide")
+# 1. CONFIGURACIÓN Y MEMORIA
+st.set_page_config(page_title="Gold Master Pro", layout="wide")
 if 'historial' not in st.session_state:
     st.session_state.historial = []
 
-# Autorefresh cada 60 segundos
-st_autorefresh(interval=60000, limit=1000, key="gold_update_final")
+# Auto-refresco cada 1 minuto
+st_autorefresh(interval=60000, limit=1000, key="gold_ultra_update")
 
-# 2. Barra Lateral (Configuración)
-st.sidebar.header("⚙️ Ajustes")
+# 2. BARRA LATERAL (AJUSTES)
+st.sidebar.header("⚙️ Parámetros")
 intervalo = st.sidebar.selectbox("Temporalidad:", options=["1m", "5m", "15m", "1h", "1d"], index=2)
 periodo_map = {"1m": "1d", "5m": "5d", "15m": "7d", "1h": "1mo", "1d": "6mo"}
 periodo = periodo_map[intervalo]
 
-# 3. Función de Sonido
+# 3. FUNCIÓN DE SONIDO
 def play_alert():
     audio_html = """<audio autoplay><source src="https://assets.mixkit.co/active_storage/sfx/2869/2869-preview.mp3" type="audio/mpeg"></audio>"""
     st.components.v1.html(audio_html, height=0)
 
-# 4. Obtención de Datos
+# 4. OBTENCIÓN Y CÁLCULO (Lógica TradingView + App)
 data = yf.download("GC=F", interval=intervalo, period=periodo)
 
-if not data.empty and len(data) > 20:
+if not data.empty and len(data) > 50:
     df = data.copy()
     if isinstance(df.columns, pd.MultiIndex): df.columns = df.columns.get_level_values(0)
 
-    # Indicadores
+    # Indicadores del Script TradingView
     df['EMA_20'] = ta.ema(df['Close'], length=20)
+    df['EMA_50'] = ta.ema(df['Close'], length=50)
     df['RSI'] = ta.rsi(df['Close'], length=14)
     
-    current_p = float(df['Close'].iloc[-1])
-    current_rsi = float(df['RSI'].iloc[-1])
-    current_ema = float(df['EMA_20'].iloc[-1])
-    current_time = df.index[-1]
+    # Detección de Velas Envolventes (Price Action)
+    df['Bullish_Eng'] = (df['Close'] > df['Open']) & (df['Close'].shift(1) < df['Open'].shift(1)) & \
+                        (df['Close'] > df['Open'].shift(1)) & (df['Open'] < df['Close'].shift(1))
+    
+    df['Bearish_Eng'] = (df['Close'] < df['Open']) & (df['Close'].shift(1) > df['Open'].shift(1)) & \
+                        (df['Close'] < df['Open'].shift(1)) & (df['Open'] > df['Close'].shift(1))
 
-    # Lógica de Señal
+    # Niveles Fibo simplificados (del Pivot High/Low)
+    high_f = df['High'].tail(20).max()
+    low_f = df['Low'].tail(20).min()
+    fib618 = high_f - (high_f - low_f) * 0.618
+    fib382 = high_f - (high_f - low_f) * 0.382
+
+    # Valores Actuales
+    cp = float(df['Close'].iloc[-1])
+    ema20 = float(df['EMA_20'].iloc[-1])
+    ema50 = float(df['EMA_50'].iloc[-1])
+    rsi = float(df['RSI'].iloc[-1])
+    is_bull = df['Bullish_Eng'].iloc[-1]
+    is_bear = df['Bearish_Eng'].iloc[-1]
+
+    # 5. LÓGICA DE SEÑAL MAESTRA
     signal = "ESPERAR"
-    if current_p > current_ema and current_rsi < 45: signal = "COMPRA"
-    elif current_p < current_ema and current_rsi > 55: signal = "VENTA"
+    # Compra: Tendencia alcista + Vela Envolvente + RSI sano
+    if ema20 > ema50 and is_bull and rsi < 65:
+        signal = "COMPRA"
+    # Venta: Tendencia bajista + Vela Envolvente + RSI sano
+    elif ema20 < ema50 and is_bear and rsi > 35:
+        signal = "VENTA"
 
-    # Guardar en Historial y Sonar
     if signal != "ESPERAR":
-        if not st.session_state.historial or st.session_state.historial[-1]['time'] != current_time:
-            st.session_state.historial.append({"time": current_time, "price": current_p, "type": signal})
+        if not st.session_state.historial or st.session_state.historial[-1]['time'] != df.index[-1]:
+            st.session_state.historial.append({"time": df.index[-1], "price": cp, "type": signal})
             play_alert()
 
-    # --- DISEÑO DE INTERFAZ ---
-    st.markdown(f"<h1 style='text-align: center; color: #FFD700;'>🥇 GOLD TERMINAL PRO</h1>", unsafe_allow_html=True)
+    # --- INTERFAZ VISUAL ---
+    st.markdown(f"<h1 style='text-align: center; color: #FFD700;'>🥇 GOLD MASTER TERMINAL</h1>", unsafe_allow_html=True)
     
-    # Fila Superior: Señal y Simulador
     col_sig, col_calc = st.columns([1, 1])
-
     with col_sig:
-        st.subheader("📢 Señal en Vivo")
+        st.subheader("📢 Señal (Fusión TV + App)")
         color = "#28a745" if signal == "COMPRA" else "#dc3545" if signal == "VENTA" else "#6c757d"
-        st.markdown(f"<div style='background:{color};padding:20px;border-radius:10px;text-align:center;color:white'><h1>{signal}</h1><p style='font-size:25px;'>${current_p:,.2f}</p></div>", unsafe_allow_html=True)
+        st.markdown(f"<div style='background:{color};padding:20px;border-radius:10px;text-align:center;color:white'><h1>{signal}</h1><p style='font-size:22px;'>Precio: ${cp:,.2f}</p></div>", unsafe_allow_html=True)
 
     with col_calc:
         st.subheader("🧮 Gestión de Riesgo")
-        cap = st.number_input("Capital ($)", value=1000.0)
+        cap = st.number_input("Capital Cuenta ($)", value=1000.0)
         riesgo = st.slider("% Riesgo", 0.5, 5.0, 1.0)
-        st.info(f"Riesgo: **${(cap * (riesgo/100)):.2f}**")
+        st.info(f"Dinero en riesgo: **${(cap * (riesgo/100)):.2f}**")
         if signal != "ESPERAR":
-            tp = current_p + 5.0 if signal == "COMPRA" else current_p - 5.0
-            sl = current_p - 3.0 if signal == "COMPRA" else current_p + 3.0
-            st.success(f"🎯 TP: {tp:.2f} | 🛑 SL: {sl:.2f}")
+            st.success(f"🎯 TP Sugerido: {cp + 5:.2f} | 🛑 SL Sugerido: {cp - 3:.2f}" if signal == "COMPRA" else f"🎯 TP: {cp - 5:.2f} | 🛑 SL: {cp + 3:.2f}")
 
-    # --- GRÁFICO CON FLECHAS ---
+    # --- GRÁFICO ---
     st.write("---")
-    fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="XAU/USD")])
-    fig.add_trace(go.Scatter(x=df.index, y=df['EMA_20'], line=dict(color='yellow', width=1.5), name='Trend'))
+    fig = go.Figure(data=[go.Candlestick(x=df.index, open=df['Open'], high=df['High'], low=df['Low'], close=df['Close'], name="Velas")])
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA_20'], line=dict(color='orange', width=1.5), name='EMA 20 (Rápida)'))
+    fig.add_trace(go.Scatter(x=df.index, y=df['EMA_50'], line=dict(color='blue', width=1.5), name='EMA 50 (Lenta)'))
     
-    # Dibujar flechas del historial
+    # Marcar Señales Históricas con flechas
     for s in st.session_state.historial:
-        color_f = "#28a745" if s['type'] == "COMPRA" else "#dc3545"
-        fig.add_annotation(x=s['time'], y=s['price'], text=f"{s['type']}", showarrow=True, arrowhead=2, bgcolor=color_f, font=dict(color="white"))
+        fig.add_annotation(x=s['time'], y=s['price'], text="▲" if s['type']=="COMPRA" else "▼", color="green" if s['type']=="COMPRA" else "red", showarrow=True)
 
     fig.update_layout(template="plotly_dark", height=500, xaxis_rangeslider_visible=False)
     st.plotly_chart(fig, use_container_width=True)
 
-    # --- NOTICIAS Y REGISTRO ---
+    # --- FOOTER: NOTICIAS Y REGISTRO ---
     c_n, c_h = st.columns(2)
     with c_n:
         st.subheader("📰 Noticias")
         feed = feedparser.parse("https://www.investing.com/rss/news_1.rss")
         for e in feed.entries[:3]: st.markdown(f"• [{e.title}]({e.link})")
     with c_h:
-        st.subheader("📜 Historial Hoy")
+        st.subheader("📜 Historial de Sesión")
         if st.session_state.historial:
-            st.table(pd.DataFrame(st.session_state.historial).tail(5))
-
+            st.dataframe(pd.DataFrame(st.session_state.historial).tail(5), use_container_width=True)
 else:
-    st.warning("Buscando conexión con el mercado...")
-    import gspread
-from google.oauth2.service_account import Credentials
-
-# Esto se conecta a tu Google Sheets
-def guardar_senal_en_nube(tiempo, precio, tipo):
-    # Aquí conectaríamos tus credenciales de Google
-    # Cada vez que 'signal' cambie, enviamos una fila nueva
-    pass
+    st.error("Esperando datos... Verifica la temporalidad.")
