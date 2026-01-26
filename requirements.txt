@@ -5,3 +5,4 @@ plotly
 pandas
 feedparser
 streamlit-autorefresh
+gspread
