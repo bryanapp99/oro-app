@@ -99,3 +99,11 @@ if not data.empty and len(data) > 20:
 
 else:
     st.warning("Buscando conexión con el mercado...")
+    import gspread
+from google.oauth2.service_account import Credentials
+
+# Esto se conecta a tu Google Sheets
+def guardar_senal_en_nube(tiempo, precio, tipo):
+    # Aquí conectaríamos tus credenciales de Google
+    # Cada vez que 'signal' cambie, enviamos una fila nueva
+    pass
