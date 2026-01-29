@@ -108,27 +108,14 @@ if not df.empty:
         st.subheader("📜 Historial Google Sheets")
         st.dataframe(cargar_historial().iloc[::-1], use_container_width=True)
 
-    with col_der:
-        st.subheader("📰 Noticias Relevantes (Enero 2026)")
-        
-        # NOTICIAS REALES ACTUALIZADAS A HOY (28-29 ENERO 2026)
-        st.info("**ORO SUPERA LOS $5,300**\n\nEl precio del oro ha marcado un máximo histórico de $5,306 ante la caída del dólar a mínimos de 4 años.")
-        
-        st.markdown("### 🚨 Flash del Mercado")
-        st.markdown("""
-        **1. Debilidad del Dólar (DXY):** El dólar ha caído tras señales de la Casa Blanca a favor de un dólar débil para exportaciones. [Fuente: Investopedia](https://www.investopedia.com)
-        
-        **2. Reunión de la FOMC:** Hoy la Fed define tasas. Se espera un 'Hawkish Hold' (mantener tasas pero con tono agresivo), lo que genera volatilidad extrema en el XAUUSD. [Fuente: MarketPulse](https://www.marketpulse.com)
-        
-        **3. Geopolítica y Deuda:** Incertidumbre por el presupuesto de EE.UU. y tensiones en Medio Oriente elevan la demanda de refugio seguro. [Fuente: The Guardian](https://www.theguardian.com)
-        
-        **4. Proyecciones 2026:** Deutsche Bank y Goldman Sachs elevan sus objetivos para el oro hacia los **$5,400 - $6,000** para finales de año. [Fuente: FXEmpire](https://www.fxempire.com)
-        """)
-        
-        st.divider()
-        st.caption("Nota: Estas noticias se actualizan manualmente basándose en el análisis fundamental global de 2026.")
-
-else:
-    st.error("⚠️ Error obteniendo datos de Yahoo Finance.")
+    with col_side:
+        st.subheader("📰 Noticias del Oro")
+        if noticias:
+            for n in noticias:
+                st.markdown(f"**[{n['title']}]({n['link']})**")
+                st.caption(f"Fuente: {n['publisher']}")
+                st.divider()
+        else:
+            st.write("Cargando noticias...")
 
 if st.button("🔄 ACTUALIZAR TODO"): st.rerun()
