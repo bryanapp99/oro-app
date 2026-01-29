@@ -9,7 +9,7 @@ st.set_page_config(page_title="Gold Master Pro V6", layout="centered")
 # 1. FUNCIÓN DE CÁLCULOS TÉCNICOS (Tu script de TV traducido)
 def procesar_datos():
     # Obtenemos datos del Oro (XAUUSD)
-    gold = yf.Ticker("GC=F") 
+    gold = yf.Ticker("XAUUSD=X") 
     df = gold.history(period="1d", interval="5m")
     
     # EMAs
