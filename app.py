@@ -4,14 +4,18 @@ import pandas as pd
 import pandas_ta as ta
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
+import time
 
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Bryan Gold 2026", layout="wide", page_icon="🔱")
 
-# --- SONIDO DE NOTIFICACIÓN ---
+# --- FUNCIÓN DE SONIDO ---
 def play_notification_sound():
+    # Sonido de notificación mediante HTML/JS
     sound_html = """
-    <audio autoplay><source src="https://www.soundjay.com/buttons/beep-01a.mp3" type="audio/mpeg"></audio>
+    <audio autoplay>
+    <source src="https://www.soundjay.com/buttons/beep-01a.mp3" type="audio/mpeg">
+    </audio>
     """
     st.components.v1.html(sound_html, height=0)
 
@@ -19,54 +23,54 @@ def play_notification_sound():
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
-    st.error("Error de conexión: Revisa los Secrets de Streamlit.")
+    st.sidebar.error("Error: Configura la URL de Google Sheets en los Secrets.")
 
 def cargar_historial():
     try:
-        # Forzamos la lectura fresca de la base de datos
-        df_hist = conn.read(ttl=0)
-        return df_hist.dropna(how="all")
+        # ttl=0 para asegurar que leemos lo último de la nube
+        return conn.read(ttl=0).dropna(how="all")
     except:
         return pd.DataFrame(columns=["Fecha", "Hora", "Tipo", "Precio"])
 
 def guardar_senal(tipo, precio):
     try:
         df_actual = cargar_historial()
-        ahora = datetime.now()
         nueva_fila = pd.DataFrame([{
-            "Fecha": ahora.strftime("%Y-%m-%d"),
-            "Hora": ahora.strftime("%H:%M:%S"),
+            "Fecha": datetime.now().strftime("%Y-%m-%d"),
+            "Hora": datetime.now().strftime("%H:%M:%S"),
             "Tipo": tipo,
             "Precio": round(float(precio), 2)
         }])
         df_final = pd.concat([df_actual, nueva_fila], ignore_index=True)
         conn.update(data=df_final)
         st.toast(f"✅ Registrado en Google Sheets")
+        time.sleep(1) # Pequeña pausa para sincronización
+        st.rerun()
     except Exception as e:
         st.error(f"Error al guardar: {e}")
 
-# --- OBTENCIÓN DE DATOS (XAUUSD - OANDA) ---
+# --- OBTENCIÓN DE DATOS (XAUUSD - OANDA VIA YAHOO) ---
 @st.cache_data(ttl=60)
 def obtener_datos():
     try:
-        # Ticker para Oro Spot (XAU/USD)
         ticker = "XAUUSD=X"
+        # Traemos 2 días para que el RSI y las EMAs tengan suficiente historial para calcularse
         data = yf.download(ticker, period="2d", interval="5m", progress=False)
-        # Limpieza de columnas MultiIndex si existen
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.get_level_values(0)
-        
-        info_gold = yf.Ticker(ticker)
-        noticias_feed = info_gold.news
-        return data, noticias_feed
-    except Exception as e:
+        gold_info = yf.Ticker(ticker)
+        return data, gold_info.news
+    except:
         return pd.DataFrame(), []
 
-# --- LÓGICA DE PROCESAMIENTO ---
-df, noticias = obtener_datos()
+# --- PROCESAMIENTO ---
+df_raw, noticias_raw = obtener_datos()
 
-if not df.empty:
-    # Cálculos Técnicos (Pine Script v6)
+if not df_raw.empty:
+    df = df_raw.copy()
+    # Limpieza de Multi-Index de yfinance
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+    
+    # 1. LÓGICA SCRIPT V6 (Exacta a TradingView)
     df['ema20'] = ta.ema(df['Close'], length=20)
     df['ema50'] = ta.ema(df['Close'], length=50)
     df['rsi'] = ta.rsi(df['Close'], length=14)
@@ -80,86 +84,96 @@ if not df.empty:
     last = df.iloc[-1]
     precio_actual = float(last['Close'])
     
-    # Condiciones de Señal Bryan Gold 2026
+    # Condiciones de Señal
     es_compra = (last['ema20'] > last['ema50']) and last['bullishEng'] and (last['rsi'] < 65)
     es_venta = (last['ema20'] < last['ema50']) and last['bearishEng'] and (last['rsi'] > 35)
 
-    # --- DISEÑO DE LA INTERFAZ ---
+    # --- DISEÑO Bryan Gold 2026 ---
     st.title("🔱 Bryan Gold 2026")
     
-    col_main, col_side = st.columns([2, 1])
+    col_izq, col_der = st.columns([2, 1])
 
-    with col_main:
-        # 1. SECCIÓN DE SEÑALES
+    with col_izq:
+        # SECCIÓN 1: SEÑALES
         st.subheader("📡 Radar de Señales (Script V6)")
+        
         if es_compra:
-            st.success(f"### 🚀 COMPRA DETECTADA @ {precio_actual:.2f}")
+            st.success(f"### 🚀 SEÑAL DE COMPRA: {precio_actual:.2f}")
             play_notification_sound()
-            if st.button("📥 REGISTRAR COMPRA EN SHEETS"):
+            if st.button("📥 GUARDAR COMPRA EN SHEETS"):
                 guardar_senal("COMPRA 🟢", precio_actual)
         elif es_venta:
-            st.error(f"### 🔥 VENTA DETECTADA @ {precio_actual:.2f}")
+            st.error(f"### 🔥 SEÑAL DE VENTA: {precio_actual:.2f}")
             play_notification_sound()
-            if st.button("📥 REGISTRAR VENTA EN SHEETS"):
+            if st.button("📥 GUARDAR VENTA EN SHEETS"):
                 guardar_senal("VENTA 🔴", precio_actual)
         else:
-            st.info(f"🔎 Analizando... Precio: {precio_actual:.2f} | RSI: {last['rsi']:.1f}")
+            st.info(f"🔎 Analizando mercado... | Precio actual: **{precio_actual:.2f}** | RSI: {last['rsi']:.2f}")
 
-        # 2. SIMULADOR DE RIESGO
+        # SECCIÓN 2: SIMULADOR DE RIESGO
         st.divider()
-        st.subheader("🧮 Simulador de Riesgo y Gestión")
+        st.subheader("🧮 Simulador de Riesgo & Niveles")
         s1, s2, s3 = st.columns(3)
-        with s1:
-            balance = st.number_input("Balance Cuenta ($)", value=1000.0)
-            riesgo_pct = st.slider("Riesgo %", 0.1, 5.0, 1.0)
-        with s2:
-            puntos_sl = st.number_input("Puntos Stop Loss", value=3.0)
-            puntos_tp = st.number_input("Puntos Take Profit", value=4.5)
-        with s3:
-            entrada_m = st.number_input("Precio de Entrada", value=precio_actual)
-
-        # Cálculo dinámico
-        es_short = es_venta or (entrada_m < last['ema20'])
-        sl_final = entrada_m + puntos_sl if es_short else entrada_m - puntos_sl
-        tp_final = entrada_m - puntos_tp if es_short else entrada_m + puntos_tp
         
-        perdida_usd = balance * (riesgo_pct / 100)
-        ganancia_usd = perdida_usd * (puntos_tp / puntos_sl)
+        with s1:
+            balance = st.number_input("Balance Cuenta ($)", value=1000.0, step=100.0)
+            riesgo_pct = st.slider("Riesgo por operación %", 0.1, 5.0, 1.0)
+        
+        with s2:
+            puntos_sl = st.number_input("Puntos de SL", value=3.0, step=0.1)
+            puntos_tp = st.number_input("Puntos de TP", value=4.5, step=0.1)
+            
+        with s3:
+            entrada_m = st.number_input("Precio Entrada Manual", value=precio_actual)
 
-        m1, m2, m3 = st.columns(3)
-        m1.metric("🛡️ SL Precio", f"{sl_final:.2f}", f"-${perdida_usd:.2f}", delta_color="inverse")
-        m2.metric("🎯 TP Precio", f"{tp_final:.2f}", f"+${ganancia_usd:.2f}")
-        m3.metric("⚖️ Ratio R:R", f"1:{(puntos_tp/puntos_sl):.1f}")
+        # Lógica de cálculo monetario
+        # Determinamos si es short o long basado en la última señal o la relación con la EMA
+        es_short_calc = es_venta or (entrada_m < last['ema20'])
+        sl_precio = entrada_m + puntos_sl if es_short_calc else entrada_m - puntos_sl
+        tp_precio = entrada_m - puntos_tp if es_short_calc else entrada_m + puntos_tp
+        
+        riesgo_dinero = balance * (riesgo_pct / 100)
+        # Ganancia basada en el ratio de puntos
+        ganancia_dinero = riesgo_dinero * (puntos_tp / puntos_sl)
 
-        # 4. REGISTRO GOOGLE SHEETS
+        r1, r2, r3 = st.columns(3)
+        r1.metric("🛡️ Stop Loss", f"{sl_precio:.2f}", f"-${riesgo_dinero:.2f}", delta_color="inverse")
+        r2.metric("🎯 Take Profit", f"{tp_precio:.2f}", f"+${ganancia_dinero:.2f}")
+        r3.metric("⚖️ Ratio R:R", f"1:{(puntos_tp/puntos_sl):.1f}")
+
+        # SECCIÓN 4: REGISTRO HISTÓRICO
         st.divider()
-        st.subheader("📜 Historial en la Nube (Google Sheets)")
+        st.subheader("📜 Historial Registrado (Nube)")
         historial_df = cargar_historial()
         if not historial_df.empty:
             st.dataframe(historial_df.iloc[::-1], use_container_width=True)
         else:
-            st.write("Esperando primera señal para registrar...")
+            st.write("No hay registros en la hoja de cálculo.")
 
-    with col_side:
-        # 3. NOTICIAS
-        st.subheader("📰 Noticias Oro & Dólar")
-        if noticias:
-            for n in noticias[:6]:
-                titulo = n.get('title', 'Sin título')
-                enlace = n.get('link', '#')
-                resumen = n.get('summary', 'Click para ver más detalles...')
-                fuente = n.get('publisher', 'Yahoo Finance')
+    with col_der:
+        # SECCIÓN 3: NOTICIAS ORO & DÓLAR
+        st.subheader("📰 Noticias & Análisis")
+        if noticias_raw:
+            for n in noticias_raw[:8]:
+                titulo = n.get('title', 'Noticia sin título')
+                st.markdown(f"**{titulo}**")
                 
-                st.markdown(f"**[{titulo}]({enlace})**")
-                st.write(f"{resumen[:130]}...")
-                st.caption(f"Fuente: {fuente}")
+                # Resumen mejorado
+                summary = n.get('summary', '')
+                if not summary:
+                    summary = "Haz clic en el enlace para leer el reporte completo en la fuente oficial."
+                
+                st.write(f"{summary[:180]}...")
+                st.markdown(f"[Leer noticia completa]({n.get('link')})")
+                st.caption(f"Fuente: {n.get('publisher', 'Finanzas')}")
                 st.divider()
         else:
-            st.write("Sin noticias relevantes en este momento.")
+            st.write("Cargando últimas noticias del mercado...")
 
 else:
-    st.error("⚠️ Error obteniendo datos de OANDA. Reintenta en unos segundos.")
+    st.error("⚠️ No se pudieron obtener datos de XAUUSD. Verifica el Ticker o la conexión.")
 
-# BOTÓN ACTUALIZAR
-if st.button("🔄 ACTUALIZAR TODO"):
+# REFRESCAR APP
+st.divider()
+if st.button("🔄 ACTUALIZAR DATOS AHORA"):
     st.rerun()
