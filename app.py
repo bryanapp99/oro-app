@@ -9,7 +9,7 @@ import time
 # --- CONFIGURACIÓN DE PÁGINA ---
 st.set_page_config(page_title="Bryan Gold 2026", layout="wide", page_icon="🔱")
 
-# --- FUNCIÓN DE SONIDO ---
+# --- SONIDO DE NOTIFICACIÓN ---
 def play_notification_sound():
     sound_html = """<audio autoplay><source src="https://www.soundjay.com/buttons/beep-01a.mp3" type="audio/mpeg"></audio>"""
     st.components.v1.html(sound_html, height=0)
@@ -38,31 +38,30 @@ def guardar_senal(tipo, precio):
     except Exception as e:
         st.error(f"Error al guardar: {e}")
 
-# --- OBTENCIÓN DE DATOS Y NOTICIAS ---
-@st.cache_data(ttl=60)
-def obtener_todo():
-    ticker = "XAUUSD=X"
-    try:
-        # Descarga de precios
-        data = yf.download(ticker, period="3d", interval="5m", progress=False)
-        if isinstance(data.columns, pd.MultiIndex):
-            data.columns = data.columns.get_level_values(0)
-        
-        # Descarga de noticias
-        gold_obj = yf.Ticker(ticker)
-        news = gold_obj.news
-        return data, news, ticker
-    except:
-        return pd.DataFrame(), [], None
+# --- OBTENCIÓN DE DATOS (REDUNDANCIA DOBLE) ---
+@st.cache_data(ttl=120)
+def obtener_datos_blindados():
+    intentos = ["XAUUSD=X", "GC=F"]
+    for t in intentos:
+        try:
+            data = yf.download(t, period="5d", interval="5m", progress=False, auto_adjust=True)
+            if not data.empty:
+                if isinstance(data.columns, pd.MultiIndex):
+                    data.columns = data.columns.get_level_values(0)
+                return data, t
+        except:
+            continue
+    return pd.DataFrame(), None
 
 # --- EJECUCIÓN ---
-df, noticias, ticker_activo = obtener_todo()
+df, ticker_activo = obtener_datos_blindados()
 
 if not df.empty:
     # Lógica Script V6
     df['ema20'] = ta.ema(df['Close'], length=20)
     df['ema50'] = ta.ema(df['Close'], length=50)
     df['rsi'] = ta.rsi(df['Close'], length=14)
+    
     c, o = df['Close'], df['Open']
     df['bullishEng'] = (c > o) & (c.shift(1) < o.shift(1)) & (c > o.shift(1))
     df['bearishEng'] = (c < o) & (c.shift(1) > o.shift(1)) & (c < o.shift(1))
@@ -73,68 +72,55 @@ if not df.empty:
     es_venta = (last['ema20'] < last['ema50']) and last['bearishEng'] and (last['rsi'] > 35)
 
     st.title("🔱 Bryan Gold 2026")
-    col_izq, col_der = st.columns([2, 1]) # Usamos col_der aquí
+    st.caption(f"Activo: {ticker_activo} (OANDA Feed)")
+    
+    # Contenedor principal sin columna de noticias
+    st.subheader("📡 Radar de Señales (V6)")
+    if es_compra:
+        st.success(f"### 🚀 COMPRA: {precio_actual:.2f}")
+        play_notification_sound()
+        if st.button("📥 GUARDAR COMPRA"): guardar_senal("COMPRA 🟢", precio_actual)
+    elif es_venta:
+        st.error(f"### 🔥 VENTA: {precio_actual:.2f}")
+        play_notification_sound()
+        if st.button("📥 GUARDAR VENTA"): guardar_senal("VENTA 🔴", precio_actual)
+    else:
+        st.info(f"🔎 Analizando mercado... Precio: **{precio_actual:.2f}** | RSI: {last['rsi']:.1f}")
 
-    with col_izq:
-        st.subheader("📡 Radar de Señales (OANDA Feed)")
-        if es_compra:
-            st.success(f"### 🚀 SEÑAL DE COMPRA: {precio_actual:.2f}")
-            play_notification_sound()
-            if st.button("📥 GUARDAR COMPRA"): guardar_senal("COMPRA 🟢", precio_actual)
-        elif es_venta:
-            st.error(f"### 🔥 SEÑAL DE VENTA: {precio_actual:.2f}")
-            play_notification_sound()
-            if st.button("📥 GUARDAR VENTA"): guardar_senal("VENTA 🔴", precio_actual)
-        else:
-            st.info(f"🔎 Analizando... Precio: **{precio_actual:.2f}** | RSI: {last['rsi']:.1f}")
+    # SIMULADOR DE RIESGO
+    st.divider()
+    st.subheader("🧮 Simulador de Riesgo")
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        balance = st.number_input("Balance Cuenta ($)", value=1000.0)
+        riesgo_pct = st.slider("Riesgo %", 0.1, 5.0, 1.0)
+    with s2:
+        puntos_sl = st.number_input("Puntos SL", value=3.0)
+        puntos_tp = st.number_input("Puntos TP", value=4.5)
+    with s3:
+        entrada = st.number_input("Entrada Manual", value=precio_actual)
 
-        st.divider()
-        st.subheader("🧮 Simulador de Riesgo")
-        s1, s2, s3 = st.columns(3)
-        with s1:
-            balance = st.number_input("Balance ($)", value=1000.0)
-            riesgo_pct = st.slider("Riesgo %", 0.1, 5.0, 1.0)
-        with s2:
-            puntos_sl, puntos_tp = st.number_input("Puntos SL", value=3.0), st.number_input("Puntos TP", value=4.5)
-        with s3:
-            entrada = st.number_input("Entrada Manual", value=precio_actual)
+    es_short = es_venta or (entrada < last['ema20'])
+    sl = entrada + puntos_sl if es_short else entrada - puntos_sl
+    tp = entrada - puntos_tp if es_short else entrada + puntos_tp
+    r_usd = balance * (riesgo_pct/100)
+    g_usd = r_usd * (puntos_tp/puntos_sl)
 
-        es_short = es_venta or (entrada < last['ema20'])
-        sl = entrada + puntos_sl if es_short else entrada - puntos_sl
-        tp = entrada - puntos_tp if es_short else entrada + puntos_tp
-        r_usd, g_usd = balance * (riesgo_pct/100), (balance * (riesgo_pct/100)) * (puntos_tp/puntos_sl)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("🛡️ SL", f"{sl:.2f}", f"-${r_usd:.2f}", delta_color="inverse")
+    m2.metric("🎯 TP", f"{tp:.2f}", f"+${g_usd:.2f}")
+    m3.metric("⚖️ Ratio R:R", f"1:{(puntos_tp/puntos_sl):.1f}")
 
-        m1, m2, m3 = st.columns(3)
-        m1.metric("🛡️ SL", f"{sl:.2f}", f"-${r_usd:.2f}", delta_color="inverse")
-        m2.metric("🎯 TP", f"{tp:.2f}", f"+${g_usd:.2f}")
-        m3.metric("⚖️ Ratio R:R", f"1:{(puntos_tp/puntos_sl):.1f}")
-
-        st.divider()
-        st.subheader("📜 Historial Google Sheets")
-        st.dataframe(cargar_historial().iloc[::-1], use_container_width=True)
-
-    with col_der: # Corregido: antes decía col_side
-        st.subheader("📰 Noticias del Oro y Dólar")
-        
-        # Bloque de noticias en vivo
-        if noticias:
-            for n in noticias[:5]: # Mostramos las 5 más recientes
-                st.markdown(f"**[{n.get('title')}]({n.get('link')})**")
-                st.caption(f"Fuente: {n.get('publisher')} | [Ver noticia]({n.get('link')})")
-                st.divider()
-        else:
-            st.warning("No se detectan noticias automáticas en este momento.")
-            
-        # Bloque de respaldo (Noticias fijas de alto impacto hoy)
-        st.info("**ANÁLISIS DE HOY 28-JAN-2026**")
-        st.markdown("""
-        * **FED:** El mercado espera la decisión de tipos hoy. Volatilidad alta.
-        * **Dólar (DXY):** Manteniéndose estable en la zona de 103.50.
-        * **Soporte Oro:** El XAUUSD encuentra soporte fuerte en la zona de la EMA50.
-        """)
+    # HISTORIAL
+    st.divider()
+    st.subheader("📜 Historial Google Sheets")
+    st.dataframe(cargar_historial().iloc[::-1], use_container_width=True)
 
 else:
-    st.error("⚠️ Error obteniendo datos de Yahoo Finance. Reintenta en 1 minuto.")
+    st.error("⚠️ Error de conexión con Yahoo Finance. Reintenta en 1 minuto.")
+    if st.button("🔄 REINTENTAR AHORA"):
+        st.rerun()
 
 st.divider()
-if st.button("🔄 ACTUALIZAR TODO"): st.rerun()
+if st.button("🔄 ACTUALIZAR TODO"):
+    st.rerun()
