@@ -6,3 +6,4 @@ pandas
 feedparser
 streamlit-autorefresh
 gspread
+twelvedata
