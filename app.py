@@ -11,7 +11,7 @@ st.set_page_config(page_title="Bryan Gold 2026", layout="wide", page_icon="🔱"
 
 # --- FUNCIÓN DE SONIDO ---
 def play_notification_sound():
-    # Sonido de notificación mediante HTML/JS
+    # Sonido de notificación simple mediante HTML
     sound_html = """
     <audio autoplay>
     <source src="https://www.soundjay.com/buttons/beep-01a.mp3" type="audio/mpeg">
@@ -23,11 +23,10 @@ def play_notification_sound():
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
-    st.sidebar.error("Error: Configura la URL de Google Sheets en los Secrets.")
+    st.error("Error: Configura la URL de Google Sheets en los Secrets de Streamlit.")
 
 def cargar_historial():
     try:
-        # ttl=0 para asegurar que leemos lo último de la nube
         return conn.read(ttl=0).dropna(how="all")
     except:
         return pd.DataFrame(columns=["Fecha", "Hora", "Tipo", "Precio"])
@@ -44,8 +43,6 @@ def guardar_senal(tipo, precio):
         df_final = pd.concat([df_actual, nueva_fila], ignore_index=True)
         conn.update(data=df_final)
         st.toast(f"✅ Registrado en Google Sheets")
-        time.sleep(1) # Pequeña pausa para sincronización
-        st.rerun()
     except Exception as e:
         st.error(f"Error al guardar: {e}")
 
@@ -53,11 +50,11 @@ def guardar_senal(tipo, precio):
 @st.cache_data(ttl=60)
 def obtener_datos():
     try:
+        # XAUUSD=X es el ticker de Yahoo para el Spot Gold (Oanda/Forex)
         ticker = "XAUUSD=X"
-        # Traemos 2 días para que el RSI y las EMAs tengan suficiente historial para calcularse
         data = yf.download(ticker, period="2d", interval="5m", progress=False)
-        gold_info = yf.Ticker(ticker)
-        return data, gold_info.news
+        gold = yf.Ticker(ticker)
+        return data, gold.news
     except:
         return pd.DataFrame(), []
 
@@ -65,23 +62,24 @@ def obtener_datos():
 df_raw, noticias_raw = obtener_datos()
 
 if not df_raw.empty:
+    # Ajuste de columnas para yfinance multi-index
     df = df_raw.copy()
-    # Limpieza de Multi-Index de yfinance
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
     
-    # 1. LÓGICA SCRIPT V6 (Exacta a TradingView)
+    # 1. LÓGICA SCRIPT V6
     df['ema20'] = ta.ema(df['Close'], length=20)
     df['ema50'] = ta.ema(df['Close'], length=50)
     df['rsi'] = ta.rsi(df['Close'], length=14)
     
-    # Velas Envolventes
+    # Velas Envolventes (Cierre[0] y Cierre[1])
     c = df['Close']
     o = df['Open']
     df['bullishEng'] = (c > o) & (c.shift(1) < o.shift(1)) & (c > o.shift(1))
     df['bearishEng'] = (c < o) & (c.shift(1) > o.shift(1)) & (c < o.shift(1))
     
     last = df.iloc[-1]
+    prev = df.iloc[-2]
     precio_actual = float(last['Close'])
     
     # Condiciones de Señal
@@ -89,7 +87,7 @@ if not df_raw.empty:
     es_venta = (last['ema20'] < last['ema50']) and last['bearishEng'] and (last['rsi'] > 35)
 
     # --- DISEÑO Bryan Gold 2026 ---
-    st.title("🔱 Bryan Gold 2026")
+    st.title("🔱 Bryan Gold 2026 - OANDA Feed")
     
     col_izq, col_der = st.columns([2, 1])
 
@@ -120,20 +118,18 @@ if not df_raw.empty:
             riesgo_pct = st.slider("Riesgo por operación %", 0.1, 5.0, 1.0)
         
         with s2:
-            puntos_sl = st.number_input("Puntos de SL", value=3.0, step=0.1)
-            puntos_tp = st.number_input("Puntos de TP", value=4.5, step=0.1)
+            puntos_sl = st.number_input("Puntos de SL (Ej: 3)", value=3.0, step=0.1)
+            puntos_tp = st.number_input("Puntos de TP (Ej: 4.5)", value=4.5, step=0.1)
             
         with s3:
-            entrada_m = st.number_input("Precio Entrada Manual", value=precio_actual)
+            entrada_m = st.number_input("Precio Entrada", value=precio_actual)
 
         # Lógica de cálculo monetario
-        # Determinamos si es short o long basado en la última señal o la relación con la EMA
         es_short_calc = es_venta or (entrada_m < last['ema20'])
         sl_precio = entrada_m + puntos_sl if es_short_calc else entrada_m - puntos_sl
         tp_precio = entrada_m - puntos_tp if es_short_calc else entrada_m + puntos_tp
         
         riesgo_dinero = balance * (riesgo_pct / 100)
-        # Ganancia basada en el ratio de puntos
         ganancia_dinero = riesgo_dinero * (puntos_tp / puntos_sl)
 
         r1, r2, r3 = st.columns(3)
@@ -143,37 +139,29 @@ if not df_raw.empty:
 
         # SECCIÓN 4: REGISTRO HISTÓRICO
         st.divider()
-        st.subheader("📜 Historial Registrado (Nube)")
+        st.subheader("📜 Historial Registrado (Google Sheets)")
         historial_df = cargar_historial()
         if not historial_df.empty:
             st.dataframe(historial_df.iloc[::-1], use_container_width=True)
-        else:
-            st.write("No hay registros en la hoja de cálculo.")
 
     with col_der:
         # SECCIÓN 3: NOTICIAS ORO & DÓLAR
-        st.subheader("📰 Noticias & Análisis")
+        st.subheader("📰 Noticias Fundamentales")
         if noticias_raw:
-            for n in noticias_raw[:8]:
-                titulo = n.get('title', 'Noticia sin título')
-                st.markdown(f"**{titulo}**")
-                
-                # Resumen mejorado
-                summary = n.get('summary', '')
-                if not summary:
-                    summary = "Haz clic en el enlace para leer el reporte completo en la fuente oficial."
-                
-                st.write(f"{summary[:180]}...")
+            for n in noticias_raw[:7]:
+                st.markdown(f"**{n.get('title')}**")
+                # Intentar mostrar resumen si existe
+                summary = n.get('summary', 'Haz clic abajo para leer la noticia completa.')
+                st.write(f"{summary[:150]}...")
                 st.markdown(f"[Leer noticia completa]({n.get('link')})")
-                st.caption(f"Fuente: {n.get('publisher', 'Finanzas')}")
+                st.caption(f"Fuente: {n.get('publisher')}")
                 st.divider()
         else:
-            st.write("Cargando últimas noticias del mercado...")
+            st.write("No hay noticias de impacto ahora mismo.")
 
 else:
-    st.error("⚠️ No se pudieron obtener datos de XAUUSD. Verifica el Ticker o la conexión.")
+    st.error("⚠️ No se pudieron obtener datos de XAUUSD. Verifica el Ticker.")
 
 # REFRESCAR APP
-st.divider()
-if st.button("🔄 ACTUALIZAR DATOS AHORA"):
+if st.button("🔄 ACTUALIZAR DATOS"):
     st.rerun()
