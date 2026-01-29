@@ -19,20 +19,23 @@ def play_notification_sound():
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
-    st.error("Error: Revisa los Secrets de Streamlit para la URL de Google Sheets.")
+    st.error("Error de conexión: Revisa los Secrets de Streamlit.")
 
 def cargar_historial():
     try:
-        return conn.read(ttl=0).dropna(how="all")
+        # Forzamos la lectura fresca de la base de datos
+        df_hist = conn.read(ttl=0)
+        return df_hist.dropna(how="all")
     except:
         return pd.DataFrame(columns=["Fecha", "Hora", "Tipo", "Precio"])
 
 def guardar_senal(tipo, precio):
     try:
         df_actual = cargar_historial()
+        ahora = datetime.now()
         nueva_fila = pd.DataFrame([{
-            "Fecha": datetime.now().strftime("%Y-%m-%d"),
-            "Hora": datetime.now().strftime("%H:%M:%S"),
+            "Fecha": ahora.strftime("%Y-%m-%d"),
+            "Hora": ahora.strftime("%H:%M:%S"),
             "Tipo": tipo,
             "Precio": round(float(precio), 2)
         }])
@@ -46,100 +49,117 @@ def guardar_senal(tipo, precio):
 @st.cache_data(ttl=60)
 def obtener_datos():
     try:
+        # Ticker para Oro Spot (XAU/USD)
         ticker = "XAUUSD=X"
         data = yf.download(ticker, period="2d", interval="5m", progress=False)
-        gold = yf.Ticker(ticker)
-        return data, gold.news
-    except:
+        # Limpieza de columnas MultiIndex si existen
+        if isinstance(data.columns, pd.MultiIndex):
+            data.columns = data.columns.get_level_values(0)
+        
+        info_gold = yf.Ticker(ticker)
+        noticias_feed = info_gold.news
+        return data, noticias_feed
+    except Exception as e:
         return pd.DataFrame(), []
 
-# --- PROCESAMIENTO ---
-df_raw, noticias = obtener_datos()
+# --- LÓGICA DE PROCESAMIENTO ---
+df, noticias = obtener_datos()
 
-if not df_raw.empty:
-    df = df_raw.copy()
-    if isinstance(df.columns, pd.MultiIndex):
-        df.columns = df.columns.get_level_values(0)
-    
-    # LÓGICA SCRIPT V6
+if not df.empty:
+    # Cálculos Técnicos (Pine Script v6)
     df['ema20'] = ta.ema(df['Close'], length=20)
     df['ema50'] = ta.ema(df['Close'], length=50)
     df['rsi'] = ta.rsi(df['Close'], length=14)
     
     # Velas Envolventes
-    c, o = df['Close'], df['Open']
+    c = df['Close']
+    o = df['Open']
     df['bullishEng'] = (c > o) & (c.shift(1) < o.shift(1)) & (c > o.shift(1))
     df['bearishEng'] = (c < o) & (c.shift(1) > o.shift(1)) & (c < o.shift(1))
     
     last = df.iloc[-1]
     precio_actual = float(last['Close'])
     
-    # Condiciones
+    # Condiciones de Señal Bryan Gold 2026
     es_compra = (last['ema20'] > last['ema50']) and last['bullishEng'] and (last['rsi'] < 65)
     es_venta = (last['ema20'] < last['ema50']) and last['bearishEng'] and (last['rsi'] > 35)
 
-    # --- INTERFAZ ---
+    # --- DISEÑO DE LA INTERFAZ ---
     st.title("🔱 Bryan Gold 2026")
     
-    col_izq, col_der = st.columns([2, 1])
+    col_main, col_side = st.columns([2, 1])
 
-    with col_izq:
-        st.subheader("📡 Radar de Señales (OANDA)")
+    with col_main:
+        # 1. SECCIÓN DE SEÑALES
+        st.subheader("📡 Radar de Señales (Script V6)")
         if es_compra:
-            st.success(f"### 🚀 COMPRA: {precio_actual:.2f}")
+            st.success(f"### 🚀 COMPRA DETECTADA @ {precio_actual:.2f}")
             play_notification_sound()
-            if st.button("📥 GUARDAR COMPRA"): guardar_senal("COMPRA 🟢", precio_actual)
+            if st.button("📥 REGISTRAR COMPRA EN SHEETS"):
+                guardar_senal("COMPRA 🟢", precio_actual)
         elif es_venta:
-            st.error(f"### 🔥 VENTA: {precio_actual:.2f}")
+            st.error(f"### 🔥 VENTA DETECTADA @ {precio_actual:.2f}")
             play_notification_sound()
-            if st.button("📥 GUARDAR VENTA"): guardar_senal("VENTA 🔴", precio_actual)
+            if st.button("📥 REGISTRAR VENTA EN SHEETS"):
+                guardar_senal("VENTA 🔴", precio_actual)
         else:
             st.info(f"🔎 Analizando... Precio: {precio_actual:.2f} | RSI: {last['rsi']:.1f}")
 
-        # SIMULADOR DE RIESGO
+        # 2. SIMULADOR DE RIESGO
         st.divider()
-        st.subheader("🧮 Simulador de Riesgo")
+        st.subheader("🧮 Simulador de Riesgo y Gestión")
         s1, s2, s3 = st.columns(3)
         with s1:
-            balance = st.number_input("Balance ($)", value=1000.0)
+            balance = st.number_input("Balance Cuenta ($)", value=1000.0)
             riesgo_pct = st.slider("Riesgo %", 0.1, 5.0, 1.0)
         with s2:
-            puntos_sl = st.number_input("Puntos SL", value=3.0)
-            puntos_tp = st.number_input("Puntos TP", value=4.5)
+            puntos_sl = st.number_input("Puntos Stop Loss", value=3.0)
+            puntos_tp = st.number_input("Puntos Take Profit", value=4.5)
         with s3:
-            entrada = st.number_input("Entrada", value=precio_actual)
+            entrada_m = st.number_input("Precio de Entrada", value=precio_actual)
 
-        es_short = es_venta or (entrada < last['ema20'])
-        sl = entrada + puntos_sl if es_short else entrada - puntos_sl
-        tp = entrada - puntos_tp if es_short else entrada + puntos_tp
+        # Cálculo dinámico
+        es_short = es_venta or (entrada_m < last['ema20'])
+        sl_final = entrada_m + puntos_sl if es_short else entrada_m - puntos_sl
+        tp_final = entrada_m - puntos_tp if es_short else entrada_m + puntos_tp
         
-        r_dinero = balance * (riesgo_pct / 100)
-        g_dinero = r_dinero * (puntos_tp / puntos_sl)
+        perdida_usd = balance * (riesgo_pct / 100)
+        ganancia_usd = perdida_usd * (puntos_tp / puntos_sl)
 
         m1, m2, m3 = st.columns(3)
-        m1.metric("🛡️ SL", f"{sl:.2f}", f"-${r_dinero:.2f}", delta_color="inverse")
-        m2.metric("🎯 TP", f"{tp:.2f}", f"+${g_dinero:.2f}")
-        m3.metric("⚖️ Ratio", f"1:{(puntos_tp/puntos_sl):.1f}")
+        m1.metric("🛡️ SL Precio", f"{sl_final:.2f}", f"-${perdida_usd:.2f}", delta_color="inverse")
+        m2.metric("🎯 TP Precio", f"{tp_final:.2f}", f"+${ganancia_usd:.2f}")
+        m3.metric("⚖️ Ratio R:R", f"1:{(puntos_tp/puntos_sl):.1f}")
 
+        # 4. REGISTRO GOOGLE SHEETS
         st.divider()
-        st.subheader("📜 Historial Google Sheets")
-        st.dataframe(cargar_historial().iloc[::-1], use_container_width=True)
+        st.subheader("📜 Historial en la Nube (Google Sheets)")
+        historial_df = cargar_historial()
+        if not historial_df.empty:
+            st.dataframe(historial_df.iloc[::-1], use_container_width=True)
+        else:
+            st.write("Esperando primera señal para registrar...")
 
-    with col_der:
-        st.subheader("📰 Noticias & Resumen")
+    with col_side:
+        # 3. NOTICIAS
+        st.subheader("📰 Noticias Oro & Dólar")
         if noticias:
             for n in noticias[:6]:
-                st.markdown(f"**{n.get('title')}**")
-                # Resumen breve
-                resumen = n.get('summary', 'Click para ver más...')
-                st.write(f"{resumen[:120]}...")
-                st.markdown(f"[Fuente Completa]({n.get('link')})")
+                titulo = n.get('title', 'Sin título')
+                enlace = n.get('link', '#')
+                resumen = n.get('summary', 'Click para ver más detalles...')
+                fuente = n.get('publisher', 'Yahoo Finance')
+                
+                st.markdown(f"**[{titulo}]({enlace})**")
+                st.write(f"{resumen[:130]}...")
+                st.caption(f"Fuente: {fuente}")
                 st.divider()
         else:
-            st.write("Sin noticias recientes.")
+            st.write("Sin noticias relevantes en este momento.")
 
 else:
-    st.error("Error al obtener datos. Reintenta en un minuto.")
+    st.error("⚠️ Error obteniendo datos de OANDA. Reintenta en unos segundos.")
 
-if st.button("🔄 ACTUALIZAR"):
+# BOTÓN ACTUALIZAR
+if st.button("🔄 ACTUALIZAR TODO"):
     st.rerun()
