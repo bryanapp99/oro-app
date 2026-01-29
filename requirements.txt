@@ -7,3 +7,4 @@ feedparser
 streamlit-autorefresh
 gspread
 twelvedata
+gsheetsdb
