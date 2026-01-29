@@ -4,26 +4,34 @@ import pandas as pd
 import pandas_ta as ta
 from datetime import datetime
 from streamlit_gsheets import GSheetsConnection
+import base64
 
-# 1. CONFIGURACIÓN DE PÁGINA
-st.set_page_config(page_title="Gold Master Pro V6", layout="wide", initial_sidebar_state="collapsed")
+# --- CONFIGURACIÓN DE PÁGINA ---
+st.set_page_config(page_title="Bryan Gold 2026", layout="wide")
 
-# 2. CONEXIÓN A GOOGLE SHEETS (BASE DE DATOS)
+# --- FUNCIONES DE SONIDO ---
+def play_sound(type):
+    # Genera un tono simple mediante HTML/JS
+    sound_html = f"""
+    <audio autoplay>
+    <source src="https://{"www.soundjay.com/buttons/beep-01a.mp3" if type=="buy" else "https://www.soundjay.com/buttons/beep-02.mp3"}" type="audio/mpeg">
+    </audio>
+    """
+    st.components.v1.html(sound_html, height=0)
+
+# --- CONEXIÓN A GOOGLE SHEETS ---
 try:
     conn = st.connection("gsheets", type=GSheetsConnection)
 except Exception as e:
-    st.error("Error de conexión a la base de datos. Verifica tus Secrets.")
+    st.sidebar.error("Error en Secrets de Google Sheets.")
 
 def cargar_historial():
     try:
-        # Cargamos los datos sin caché para ver actualizaciones inmediatas
-        df = conn.read(ttl=0)
-        return df.dropna(how="all")
+        return conn.read(ttl=0).dropna(how="all")
     except:
-        # Si la hoja está vacía, creamos la estructura básica
         return pd.DataFrame(columns=["Fecha", "Hora", "Tipo", "Precio"])
 
-def guardar_senal(tipo, precio):
+def guardar_senal_cloud(tipo, precio):
     try:
         df_actual = cargar_historial()
         nueva_fila = pd.DataFrame([{
@@ -34,118 +42,111 @@ def guardar_senal(tipo, precio):
         }])
         df_final = pd.concat([df_actual, nueva_fila], ignore_index=True)
         conn.update(data=df_final)
-        st.toast(f"✅ Señal de {tipo} guardada en Google Sheets")
+        st.toast(f"✅ Registrado en Google Sheets")
     except Exception as e:
-        st.error(f"No se pudo guardar: {e}")
+        st.error(f"Error al guardar: {e}")
 
-# 3. OBTENCIÓN DE DATOS DEL MERCADO
-@st.cache_data(ttl=60)
+# --- OBTENCIÓN DE DATOS (XAU/USD OANDA) ---
+@st.cache_data(ttl=30)
 def obtener_datos():
     try:
-        gold = yf.Ticker("GC=F")
-        # Pedimos suficientes datos para que las EMAs se calculen bien
-        df = gold.history(period="2d", interval="5m")
-        noticias = gold.news
-        return df, noticias
+        # GC=F es el futuro del oro (más líquido), alternativamente XAUUSD=X
+        ticker = "GC=F" 
+        data = yf.download(ticker, period="2d", interval="5m", progress=False)
+        gold = yf.Ticker(ticker)
+        return data, gold.news
     except:
         return pd.DataFrame(), []
 
-# --- INICIO DE LA LÓGICA ---
-df_raw, noticias = obtener_datos()
+# --- LÓGICA DEL SCRIPT GOLD MASTER PRO V6 ---
+df, noticias = obtener_datos()
 
-if not df_raw.empty:
-    # 4. CÁLCULOS TÉCNICOS COMPLETOS
-    df = df_raw.copy()
+if not df.empty:
+    # Adaptar columnas de yfinance
+    df.columns = [col[0] if isinstance(col, tuple) else col for col in df.columns]
+    
+    # Cálculos según tu script Pine v6
     df['ema20'] = ta.ema(df['Close'], length=20)
     df['ema50'] = ta.ema(df['Close'], length=50)
     df['rsi'] = ta.rsi(df['Close'], length=14)
     
-    # Lógica de Velas Envolventes (Price Action)
-    df['bull_eng'] = (df['Close'] > df['Open']) & (df['Close'].shift(1) < df['Open'].shift(1)) & (df['Close'] > df['Open'].shift(1))
-    df['bear_eng'] = (df['Close'] < df['Open']) & (df['Close'].shift(1) > df['Open'].shift(1)) & (df['Close'] < df['Open'].shift(1))
+    # Velas Envolventes
+    df['bullishEng'] = (df['Close'] > df['Open']) & (df['Close'].shift(1) < df['Open'].shift(1)) & (df['Close'] > df['Open'].shift(1))
+    df['bearishEng'] = (df['Close'] < df['Open']) & (df['Close'].shift(1) > df['Open'].shift(1)) & (df['Close'] < df['Open'].shift(1))
     
-    # Valores de la última vela cerrada
     last = df.iloc[-1]
     precio_actual = float(last['Close'])
     
-    # Definición de Señales
-    es_compra = (last['ema20'] > last['ema50']) and last['bull_eng'] and (last['rsi'] < 65)
-    es_venta = (last['ema20'] < last['ema50']) and last['bear_eng'] and (last['rsi'] > 35)
+    # Condiciones exactas de tu script
+    es_compra = (last['ema20'] > last['ema50']) and last['bullishEng'] and (last['rsi'] < 65)
+    es_venta = (last['ema20'] < last['ema50']) and last['bearishEng'] and (last['rsi'] > 35)
 
-    # 5. DISEÑO DE LA INTERFAZ
-    col_main, col_news = st.columns([2, 1])
+    # --- INTERFAZ Bryan Gold 2026 ---
+    st.title("🔱 Bryan Gold 2026")
+    
+    col_izq, col_der = st.columns([2, 1])
 
-    with col_main:
-        st.title("🔱 Gold Master Pro V6")
-        
-        # Panel de Señales
+    with col_izq:
+        # 1. SECCIÓN DE SEÑALES
+        st.subheader("📡 Señales en Tiempo Real (Script V6)")
         if es_compra:
-            st.success(f"### 🚀 SEÑAL DE COMPRA: {precio_actual:.2f}")
-            if st.button("📥 REGISTRAR COMPRA EN EXCEL"):
-                guardar_senal("COMPRA 🟢", precio_actual)
+            st.success(f"### 🟢 COMPRA DETECTADA @ {precio_actual:.2f}")
+            play_sound("buy")
+            if st.button("📥 REGISTRAR COMPRA"):
+                guardar_senal_cloud("COMPRA 🟢", precio_actual)
         elif es_venta:
-            st.error(f"### 🔥 SEÑAL DE VENTA: {precio_actual:.2f}")
-            if st.button("📥 REGISTRAR VENTA EN EXCEL"):
-                guardar_senal("VENTA 🔴", precio_actual)
+            st.error(f"### 🔴 VENTA DETECTADA @ {precio_actual:.2f}")
+            play_sound("sell")
+            if st.button("📥 REGISTRAR VENTA"):
+                guardar_senal_cloud("VENTA 🔴", precio_actual)
         else:
-            st.info(f"🔎 Monitorizando... | Precio Actual: **{precio_actual:.2f}** | RSI: {last['rsi']:.1f}")
+            st.info(f"⏳ Buscando señal... | Precio: {precio_actual:.2f} | RSI: {last['rsi']:.1f}")
 
-        # 6. CALCULADORA DE RIESGO AJUSTABLE
+        # 2. SIMULADOR DE RIESGO EDITABLE
         st.divider()
-        st.subheader("🧮 Gestión de Riesgo Personalizada")
+        st.subheader("🧮 Simulador de Riesgo y Gestión")
         c1, c2, c3 = st.columns(3)
-        
         with c1:
-            balance = st.number_input("Balance Cuenta ($)", value=1000.0, step=100.0)
+            balance = st.number_input("Balance Cuenta ($)", value=1000.0)
             riesgo_pct = st.slider("Riesgo %", 0.5, 5.0, 1.0)
-        
         with c2:
-            puntos_sl = st.number_input("Puntos Stop Loss (SL)", value=3.0, step=0.5)
-            puntos_tp = st.number_input("Puntos Take Profit (TP)", value=4.5, step=0.5)
-            
+            puntos_sl = st.number_input("Puntos Stop Loss", value=3.0)
+            puntos_tp = st.number_input("Puntos Take Profit", value=4.5)
         with c3:
-            precio_entrada = st.number_input("Precio de Entrada", value=precio_actual)
+            entrada = st.number_input("Entrada Manual", value=precio_actual)
 
-        # Cálculo dinámico de niveles monetarios
-        # Determinamos si es Short o Long para la calculadora
-        es_short = es_venta or (precio_entrada < last['ema20'])
-        sl_precio = precio_entrada + puntos_sl if es_short else precio_entrada - puntos_sl
-        tp_precio = precio_entrada - puntos_tp if es_short else precio_entrada + puntos_tp
+        # Cálculos de Riesgo
+        es_short_calc = es_venta or (entrada < last['ema20'])
+        sl_final = entrada + puntos_sl if es_short_calc else entrada - puntos_sl
+        tp_final = entrada - puntos_tp if es_short_calc else entrada + puntos_tp
         
-        dinero_riesgo = balance * (riesgo_pct / 100)
-        ratio = puntos_tp / puntos_sl
-        ganancia_posible = dinero_riesgo * ratio
+        perdida_usd = balance * (riesgo_pct / 100)
+        ganancia_usd = perdida_usd * (puntos_tp / puntos_sl)
 
-        # Mostrar métricas de riesgo
         m1, m2, m3 = st.columns(3)
-        m1.metric("🛡️ SL Precio", f"{sl_precio:.2f}")
-        m2.metric("🎯 TP Precio", f"{tp_precio:.2f}")
-        m3.metric("💰 Arriesgas", f"${dinero_riesgo:.2f}")
-        
-        st.write(f"**Proyección:** Si ganas, sumas **+${ganancia_posible:.2f}** (Ratio 1:{ratio:.1f})")
+        m1.metric("🛡️ SL Precio", f"{sl_final:.2f}", f"-${perdida_usd:.2f}", delta_color="inverse")
+        m2.metric("🎯 TP Precio", f"{tp_final:.2f}", f"+${ganancia_usd:.2f}")
+        m3.metric("⚖️ Ratio R:R", f"1:{(puntos_tp/puntos_sl):.2f}")
 
-        # 7. HISTORIAL DE GOOGLE SHEETS
+        # 4. REGISTRO GOOGLE SHEETS
         st.divider()
-        st.subheader("📜 Registro Histórico (Cloud)")
-        historial_df = cargar_historial()
-        if not historial_df.empty:
-            st.dataframe(historial_df.iloc[::-1], use_container_width=True)
-        else:
-            st.write("La base de datos en la nube está esperando la primera señal.")
+        st.subheader("📜 Historial de Señales (Cloud)")
+        historial = cargar_historial()
+        st.dataframe(historial.iloc[::-1], use_container_width=True)
 
-    with col_news:
+    with col_der:
+        # 3. NOTICIAS ORO Y DÓLAR
         st.subheader("📰 Noticias Fundamentales")
         if noticias:
-            for n in noticias[:6]:
-                st.markdown(f"**[{n.get('title', 'Noticia sin título')}]({n.get('link', '#')})**")
-                st.caption(f"Fuente: {n.get('publisher', 'Desconocida')}")
+            for n in noticias[:8]:
+                st.markdown(f"**[{n.get('title', 'Noticia')}]({n.get('link', '#')})**")
+                st.caption(f"Fuente: {n.get('publisher', 'Yahoo Finance')}")
                 st.divider()
         else:
-            st.write("No hay noticias disponibles en este momento.")
+            st.write("No hay noticias en este momento.")
 
 else:
-    st.warning("⚠️ No se reciben datos del mercado. Verifica la conexión a Internet o el Ticker de Yahoo.")
+    st.error("Esperando conexión con XAUUSD de OANDA...")
 
-# Botón de actualización global
-if st.button("🔄 ACTUALIZAR TODO"):
+if st.button("🔄 ACTUALIZAR"):
     st.rerun()
