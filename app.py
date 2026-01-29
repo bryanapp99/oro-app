@@ -74,10 +74,19 @@ if not df.empty:
         st.dataframe(historial.sort_index(ascending=False), use_container_width=True)
 
     with col_der:
-        st.subheader("📰 Noticias Fundamentales")
+    st.subheader("📰 Noticias")
+    if noticias:
         for n in noticias:
-            st.markdown(f"**[{n['title']}]({n['link']})**")
+            # Usamos .get() para evitar el KeyError si falta algún dato
+            titulo = n.get('title', 'Sin título disponible')
+            link = n.get('link', '#')
+            fuente = n.get('publisher', 'Yahoo Finance')
+            
+            st.markdown(f"**[{titulo}]({link})**")
+            st.caption(f"Fuente: {fuente}")
             st.divider()
+    else:
+        st.write("No hay noticias recientes disponibles.")
 
 if st.button("🔄 Actualizar App"):
     st.rerun()
